@@ -416,6 +416,28 @@
       align-items: center;
     }
 
+    .modal-confirm {
+      width: min(420px, 100%);
+    }
+
+    .modal-confirm p {
+      margin: 0;
+      color: var(--ink);
+      line-height: 1.5;
+    }
+
+    .visually-hidden {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
     .toast {
       position: fixed;
       right: 18px;
@@ -570,6 +592,8 @@
         <div class="actions">
           <button class="btn-secondary" id="seedDemo"><svg class="icon" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7H14a3.5 3.5 0 0 1 0 7H6"/></svg>Exemplo</button>
           <button class="btn-secondary" id="backupJson"><svg class="icon" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5M12 15V3"/></svg>Backup</button>
+          <button class="btn-secondary" id="restoreBackup"><svg class="icon" viewBox="0 0 24 24"><path d="M21 9V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v4"/><path d="M7 14l5-5 5 5M12 9v12"/></svg>Restaurar</button>
+          <input type="file" id="restoreInput" accept="application/json,.json" class="visually-hidden">
           <button class="btn-primary" id="newMaterialTop"><svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Material</button>
         </div>
       </div>
@@ -985,6 +1009,21 @@
   </div>
 
   <div class="print-area" id="listPrintArea"></div>
+
+  <div class="modal-backdrop" id="confirmModal" role="alertdialog" aria-modal="true" aria-labelledby="confirmModalTitle" aria-describedby="confirmModalText">
+    <div class="modal modal-confirm">
+      <div class="modal-head">
+        <h2 id="confirmModalTitle">Confirmar acao</h2>
+        <button class="btn-icon" type="button" id="closeConfirm" aria-label="Fechar"><svg class="icon" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+      </div>
+      <p id="confirmModalText"></p>
+      <div class="actions">
+        <button class="btn-secondary" type="button" id="cancelConfirm">Cancelar</button>
+        <button class="btn-primary" type="button" id="acceptConfirm"><svg class="icon" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Confirmar</button>
+      </div>
+    </div>
+  </div>
+
   <div class="toast" id="toast"></div>
 
   <script>
@@ -1103,6 +1142,29 @@
       toast.classList.add('show');
       window.clearTimeout(showToast.timer);
       showToast.timer = window.setTimeout(() => toast.classList.remove('show'), 2400);
+    }
+
+    let confirmResolve = null;
+
+    function showConfirm(message, options = {}) {
+      const { title = 'Confirmar acao', confirmText = 'Confirmar', danger = false } = options;
+      $('confirmModalTitle').textContent = title;
+      $('confirmModalText').textContent = message;
+      const acceptBtn = $('acceptConfirm');
+      acceptBtn.className = danger ? 'btn-danger' : 'btn-primary';
+      acceptBtn.innerHTML = `<svg class="icon" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>${escapeHtml(confirmText)}`;
+      $('confirmModal').classList.add('open');
+      return new Promise((resolve) => {
+        confirmResolve = (result) => {
+          $('confirmModal').classList.remove('open');
+          confirmResolve = null;
+          resolve(result);
+        };
+      });
+    }
+
+    function resolveConfirm(result) {
+      if (confirmResolve) confirmResolve(result);
     }
 
     function setView(view) {
@@ -1307,13 +1369,13 @@
       showToast('Lista marcada como separada.');
     }
 
-    function confirmListOut(id) {
+    async function confirmListOut(id) {
       const list = listById(id);
       if (!list || !['rascunho', 'separada'].includes(list.status)) return;
       const missing = list.items.filter((item) => item.qty > stockOf(item.materialId));
-      if (missing.length && !confirm('Alguns itens estao com estoque menor que a lista. Confirmar saida mesmo assim?')) return;
-      list.items.forEach((item) => {
-        addMove({
+      if (missing.length && !(await showConfirm('Alguns itens estao com estoque menor que a lista. Confirmar saida mesmo assim?', { confirmText: 'Confirmar saida' }))) return;
+      for (const item of list.items) {
+        await addMove({
           type: list.type,
           materialId: item.materialId,
           qty: item.qty,
@@ -1322,7 +1384,7 @@
           person: list.person,
           note: 'Saida confirmada pela lista'
         }, { silent: true, skipShortageConfirm: true });
-      });
+      }
       list.status = 'saiu';
       list.outAt = new Date().toISOString();
       saveState();
@@ -1330,10 +1392,10 @@
       showToast('Saida da lista confirmada.');
     }
 
-    function deleteList(id) {
+    async function deleteList(id) {
       const list = listById(id);
       if (!list) return;
-      if (!confirm(`Excluir a lista "${list.name}"?`)) return;
+      if (!(await showConfirm(`Excluir a lista "${list.name}"?`, { confirmText: 'Excluir', danger: true }))) return;
       state.lists = state.lists.filter((item) => item.id !== id);
       saveState();
       render();
@@ -1643,10 +1705,10 @@
       render();
     }
 
-    function deleteMaterial(id) {
+    async function deleteMaterial(id) {
       const mat = materialById(id);
       if (!mat) return;
-      if (!confirm(`Excluir "${mat.name}" e todo o historico desse material?`)) return;
+      if (!(await showConfirm(`Excluir "${mat.name}" e todo o historico desse material?`, { confirmText: 'Excluir', danger: true }))) return;
       state.materials = state.materials.filter((item) => item.id !== id);
       state.moves = state.moves.filter((move) => move.materialId !== id);
       saveState();
@@ -1654,7 +1716,7 @@
       showToast('Material excluido.');
     }
 
-    function addMove(data, options = {}) {
+    async function addMove(data, options = {}) {
       const mat = materialById(data.materialId);
       if (!mat) return showToast('Selecione um material.');
       const qty = numberValue(data.qty);
@@ -1662,7 +1724,10 @@
       const type = TYPES[data.type];
       if (!type) return showToast('Selecione o tipo de movimento.');
       const current = stockOf(mat.id);
-      if (!options.skipShortageConfirm && type.signal < 0 && qty > current && !confirm(`O estoque atual e ${fmt.format(current)} ${mat.unit}. Registrar mesmo assim?`)) return;
+      if (!options.skipShortageConfirm && type.signal < 0 && qty > current) {
+        const ok = await showConfirm(`O estoque atual e ${fmt.format(current)} ${mat.unit}. Registrar mesmo assim?`, { confirmText: 'Registrar mesmo assim' });
+        if (!ok) return;
+      }
       state.moves.push({ id: uid('mov'), ...data, qty, date: data.date || todayIso() });
       if (!options.silent) {
         saveState();
@@ -1672,10 +1737,10 @@
       return true;
     }
 
-    function handleMoveForm(event) {
+    async function handleMoveForm(event) {
       event.preventDefault();
       const prefix = event.target.id === 'quickMoveForm' ? 'quick' : 'move';
-      const ok = addMove({
+      const ok = await addMove({
         type: $(prefix + 'Type').value,
         materialId: $(prefix + 'Material').value,
         qty: $(prefix + 'Qty').value,
@@ -1697,8 +1762,8 @@
       updateMoveHint();
     }
 
-    function deleteMove(id) {
-      if (!confirm('Excluir este movimento do historico?')) return;
+    async function deleteMove(id) {
+      if (!(await showConfirm('Excluir este movimento do historico?', { confirmText: 'Excluir', danger: true }))) return;
       state.moves = state.moves.filter((move) => move.id !== id);
       saveState();
       render();
@@ -1738,6 +1803,42 @@
       downloadFile('backup-estoque-eletrico.json', JSON.stringify(state, null, 2), 'application/json;charset=utf-8');
     }
 
+    function triggerRestore() {
+      $('restoreInput').value = '';
+      $('restoreInput').click();
+    }
+
+    async function restoreBackupFromFile(file) {
+      if (!file) return;
+      let parsed;
+      try {
+        const text = await file.text();
+        parsed = JSON.parse(text);
+      } catch (error) {
+        showToast('Arquivo invalido. Selecione um backup .json gerado por este app.');
+        return;
+      }
+      if (!parsed || !Array.isArray(parsed.materials) || !Array.isArray(parsed.moves)) {
+        showToast('Arquivo invalido. Selecione um backup .json gerado por este app.');
+        return;
+      }
+      const summary = `${parsed.materials.length} materiais, ${parsed.moves.length} movimentos e ${Array.isArray(parsed.lists) ? parsed.lists.length : 0} listas.`;
+      const ok = await showConfirm(
+        `Isso vai substituir todos os dados atuais (${state.materials.length} materiais, ${state.moves.length} movimentos) pelos dados do backup: ${summary} Essa acao nao pode ser desfeita.`,
+        { title: 'Restaurar backup', confirmText: 'Restaurar e substituir', danger: true }
+      );
+      if (!ok) return;
+      state = {
+        materials: parsed.materials,
+        moves: parsed.moves,
+        lists: Array.isArray(parsed.lists) ? parsed.lists : []
+      };
+      saveState();
+      renderCategories();
+      setView(activeView);
+      showToast('Backup restaurado com sucesso.');
+    }
+
     function downloadFile(filename, content, type) {
       const blob = new Blob([content], { type });
       const url = URL.createObjectURL(blob);
@@ -1754,8 +1855,8 @@
       return `"${String(value ?? '').replaceAll('"', '""')}"`;
     }
 
-    function seedDemo() {
-      if (state.materials.length && !confirm('Adicionar dados de exemplo aos registros atuais?')) return;
+    async function seedDemo() {
+      if (state.materials.length && !(await showConfirm('Adicionar dados de exemplo aos registros atuais?', { confirmText: 'Adicionar' }))) return;
       const items = [
         ['CAB-PP-001', 'Cabo PP 3x2,5mm', 'Cabos', 'Prateleira A1', 'm', 120, 80],
         ['EXT-20A-010', 'Extensao 20A 10m', 'Extensoes', 'Caixa E2', 'un', 18, 10],
@@ -1818,6 +1919,15 @@
         render();
       }));
       $('backupJson').addEventListener('click', backupJson);
+      $('restoreBackup').addEventListener('click', triggerRestore);
+      $('restoreInput').addEventListener('change', (event) => {
+        const file = event.target.files && event.target.files[0];
+        restoreBackupFromFile(file);
+      });
+      $('closeConfirm').addEventListener('click', () => resolveConfirm(false));
+      $('cancelConfirm').addEventListener('click', () => resolveConfirm(false));
+      $('acceptConfirm').addEventListener('click', () => resolveConfirm(true));
+      $('confirmModal').addEventListener('click', (event) => { if (event.target.id === 'confirmModal') resolveConfirm(false); });
       $('seedDemo').addEventListener('click', seedDemo);
       $('showLosses').addEventListener('click', () => {
         lossOnly = true;
@@ -1829,6 +1939,7 @@
         if (event.key === 'Escape') {
           closeMaterial();
           closeReturn();
+          resolveConfirm(false);
         }
       });
     }
